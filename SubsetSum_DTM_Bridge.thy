@@ -735,11 +735,32 @@ locale Coverage_TM =
   and from_bits :: "bool list ⇒ int"
   +
 fixes kk :: nat
+  (* NEW: define the locale-internal projections and predicate upfront *)
+  fixes Lval_at :: "int list ⇒ int ⇒ (nat ⇒ bool) ⇒ nat ⇒ int"
+  defines Lval_at_def:
+    "Lval_at as s oL j ≡
+       from_bits (map oL
+         [length (enc0 as s) + offL as s j
+          ..< length (enc0 as s) + offL as s j + W as s])"
 
+  fixes Rval_at :: "int list ⇒ int ⇒ (nat ⇒ bool) ⇒ nat ⇒ int"
+  defines Rval_at_def:
+    "Rval_at as s oR j ≡
+       from_bits (map oR
+         [length (enc0 as s) + offR as s kk j
+          ..< length (enc0 as s) + offR as s kk j + W as s])"
+
+  fixes good :: "int list ⇒ int ⇒ (nat ⇒ bool) ⇒ (nat ⇒ bool) ⇒ bool"
+  defines good_def:
+    "good as s oL oR ≡
+       (∃jL<length (enumL as s kk). ∃jR<length (enumR as s kk).
+          Lval_at as s oL jL = Rval_at as s oR jR)"
+
+  (* existing obligations: unchanged *)
   assumes correctness:
-    "accepts M (enc as s kk)
-       ⟷ good as s (λi. (enc as s kk) ! i) (λj. (enc as s kk) ! j)"
-  assumes read0_after_enc0:
+    "⋀as s. accepts M (enc as s kk) =
+            good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+  and read0_after_enc0:
     "Base.read0 M (enc as s kk)
        ⊆ { length (enc0 as s)
           ..< length (enc0 as s) + length (padL as s kk) + length (padR as s kk) }"
@@ -787,14 +808,6 @@ proof -
     by (simp add: enc_def add_left_mono)
 qed
 
-definition Lval_at :: "int list ⇒ int ⇒ (nat ⇒ bool) ⇒ nat ⇒ int" where
-  "Lval_at as s oL j =
-     from_bits (map oL [length (enc0 as s) + offL as s j  ..<  length (enc0 as s) + offL as s j + W as s])"
-
-definition Rval_at :: "int list ⇒ int ⇒ (nat ⇒ bool) ⇒ nat ⇒ int" where
-  "Rval_at as s oR j =
-     from_bits (map oR [length (enc0 as s) + offR as s kk j ..<  length (enc0 as s) + offR as s kk j + W as s])"
-
 (* 1) The index sets we want fully covered *)
 definition Lset where
   "Lset as s ≡ ⋃ j < length (enumL as s kk). blockL_abs enc0 as s j"
@@ -808,12 +821,6 @@ definition T where
      tm_to_dtr' head0 stepf final_acc
        (steps M (enc as s kk))
        (conf M (enc as s kk) 0)"
-
-(* 3) The semantic predicate that the DT computes (pure spec; no bitstrings) *)
-definition good where
-  "good as s oL oR ≡
-     (∃jL<length (enumL as s kk). ∃jR<length (enumR as s kk).
-        Lval_at as s oL jL = Rval_at as s oR jR)"
 
 lemma in_padL_imp_in_some_blockL_abs:
   assumes i_in:
@@ -1530,6 +1537,72 @@ proof -
     by (simp add: Good_def)
 qed
 
+lemma Good_char_encR:
+  "Good as s oL ((!) (x0 as s))
+   ⟷ (∃jL<length (enumL as s kk). Lval_at as s oL jL ∈ set (enumR as s kk))"
+proof
+  (* ⇒ *)
+  assume H: "Good as s oL ((!) (x0 as s))"
+  then obtain jL jR where
+    jL: "jL < length (enumL as s kk)" and jR: "jR < length (enumR as s kk)" and
+    eq: "Lval_at as s oL jL = Rval_at as s ((!) (x0 as s)) jR"
+    unfolding Good_def good_def by blast
+  hence "Lval_at as s oL jL = enumR as s kk ! jR"
+    by (simp add: Rval_at_on_enc_block jR)
+  thus "∃jL<length (enumL as s kk). Lval_at as s oL jL ∈ set (enumR as s kk)"
+    using jL in_set_conv_nth by (metis jR)
+next
+  (* ⇐ *)
+  assume "∃jL<length (enumL as s kk). Lval_at as s oL jL ∈ set (enumR as s kk)"
+  then obtain jL where jL: "jL < length (enumL as s kk)"
+    and mem: "Lval_at as s oL jL ∈ set (enumR as s kk)" by blast
+  then obtain jR where jR: "jR < length (enumR as s kk)"
+    and eq0: "enumR as s kk ! jR = Lval_at as s oL jL"
+    using in_set_conv_nth by metis
+  hence "Rval_at as s ((!) (x0 as s)) jR = Lval_at as s oL jL"
+    by (simp add: Rval_at_on_enc_block jR)
+  thus "Good as s oL ((!) (x0 as s))"
+    using jL jR Good_def good_def by metis
+qed
+
+lemma correct_T0_encR:
+  "run oL ((!) (x0 as s)) (T0 as s) = Good as s oL ((!) (x0 as s))"
+proof -
+  (* Unfold the concrete tree and use that tm_to_dtr' only depends on oL *)
+  have T: "T0 as s =
+      tm_to_dtr' head0 stepf final_acc
+        (steps M (x0 as s)) (conf M (x0 as s) 0)"
+    by (simp add: T0_def)
+
+  have run_drive:
+    "run oL ((!) (x0 as s)) (T0 as s)
+     = final_acc (drive (steps M (x0 as s)) (conf M (x0 as s) 0) oL)"
+    by (simp add: T run_tm_to_dtr')
+
+  (* Identify what this Boolean means on the right-catalog side *)
+  have drive_char:
+    "final_acc (drive (steps M (x0 as s)) (conf M (x0 as s) 0) oL)
+     = (∃jL<length (enumL as s kk). Lval_at as s oL jL ∈ set (enumR as s kk))"
+  proof -
+    (* This is exactly the mixed-oracle view of the spec:
+       use the catalog facts you already proved. *)
+    have "set (map (Rval_at as s ((!) (x0 as s))) [0..<length (enumR as s kk)])
+          = set (enumR as s kk)"
+      by (rule R_catalog_for_enc)
+    hence "(∃jL<length (enumL as s kk).
+              Lval_at as s oL jL ∈ set (enumR as s kk))
+         ⟷ (∃jL<length (enumL as s kk). ∃jR<length (enumR as s kk).
+              Lval_at as s oL jL = Rval_at as s ((!) (x0 as s)) jR)"
+      by (auto simp: in_set_conv_nth)
+    then show ?thesis
+      (* rewrite the goal to the RHS we just characterized and fold back via Good_char_encR *)
+      by (simp add: Good_char_encR[symmetric])
+  qed
+
+  from run_drive drive_char show ?thesis
+    by simp
+qed
+
 lemma Lval_at_on_enc_block:
   assumes jL: "j < length (enumL as s kk)"
   shows "Lval_at as s ((!) (x0 as s)) j = enumL as s kk ! j"
@@ -1608,33 +1681,7 @@ proof -
     by (simp add: Lval_at_def slice round)
 qed
 
-lemma Good_char_encR:
-  "Good as s oL ((!) (x0 as s))
-   ⟷ (∃jL<length (enumL as s kk). Lval_at as s oL jL ∈ set (enumR as s kk))"
-proof
-  (* ⇒ *)
-  assume H: "Good as s oL ((!) (x0 as s))"
-  then obtain jL jR where
-    jL: "jL < length (enumL as s kk)" and jR: "jR < length (enumR as s kk)" and
-    eq: "Lval_at as s oL jL = Rval_at as s ((!) (x0 as s)) jR"
-    unfolding Good_def good_def by blast
-  hence "Lval_at as s oL jL = enumR as s kk ! jR"
-    by (simp add: Rval_at_on_enc_block jR)
-  thus "∃jL<length (enumL as s kk). Lval_at as s oL jL ∈ set (enumR as s kk)"
-    using jL in_set_conv_nth by (metis jR)
-next
-  (* ⇐ *)
-  assume "∃jL<length (enumL as s kk). Lval_at as s oL jL ∈ set (enumR as s kk)"
-  then obtain jL where jL: "jL < length (enumL as s kk)"
-    and mem: "Lval_at as s oL jL ∈ set (enumR as s kk)" by blast
-  then obtain jR where jR: "jR < length (enumR as s kk)"
-    and eq0: "enumR as s kk ! jR = Lval_at as s oL jL"
-    using in_set_conv_nth by metis
-  hence "Rval_at as s ((!) (x0 as s)) jR = Lval_at as s oL jL"
-    by (simp add: Rval_at_on_enc_block jR)
-  thus "Good as s oL ((!) (x0 as s))"
-    using jL jR Good_def good_def by metis
-qed
+
 
 lemma flipL0:
   assumes jL: "j < length (enumL as s kk)"
@@ -1971,23 +2018,51 @@ proof (intro allI impI)
     have run_x:
       "run (λi. ?x ! i) (λi. ?x ! i) (T0 as s) = Good as s (λi. ?x ! i) (λi. ?x ! i)"
       by (simp add: correct_T0)
+    (* x0 as s = enc as s kk *)
+    have X0: "?x = enc as s kk" by simp
+
+    (* seen sets are inside Base.read0 for this input *)
+    have SLsub:
+      "seenL_run ((!) ?x) ((!) ?x) (T0 as s) ⊆ Base.read0 M ?x"
+      by (rule seenL_T0_subset_read0[OF X0])
+    have SRsub:
+      "seenR_run ((!) ?x) ((!) ?x) (T0 as s) ⊆ Base.read0 M ?x"
+      by (rule seenR_T0_subset_read0[OF X0])
+
+    (* left oracle equality on all nodes the tree ever reads *)
     have run_y_eq_run_x:
-      "run (λi. y ! i) (λi. ?x ! i) (T0 as s) = run (λi. ?x ! i) (λi. ?x ! i) (T0 as s)"
+      "run ((!) ?x) ((!) ?x) (T0 as s) = run ((!) y) ((!) ?x) (T0 as s)"
     proof (rule run_agrees_on_seen)
-      fix i assume "i ∈ seenL_run ((!) y) ((!) ?x) (T0 as s)"
-      hence "i ∈ Base.read0 M ?x" by (meson correctness)
-      thus "y ! i = ?x ! i" using agree_unread by blast
+      (* L-queries agree by unread-agreement on Base.read0 *)
+      fix i assume "i ∈ seenL_run ((!) ?x) ((!) ?x) (T0 as s)"
+      with SLsub have "i ∈ Base.read0 M ?x" by blast
+      hence "(!) ?x i = (!) y i" using agree_unread by blast
+      thus "(!) ?x i = (!) y i" .
     next
-      fix j' assume "j' ∈ seenR_run ((!) y) ((!) ?x) (T0 as s)"
-      thus "(?x ! j') = (?x ! j')" by simp
+  (* R-queries are both ?x by construction *)
+      fix j assume "j ∈ seenR_run ((!) ?x) ((!) ?x) (T0 as s)"
+      show "(!) ?x j = (!) ?x j" by simp
     qed
 
     have Good_flip_inputs:
       "Good as s (λi. y ! i) (λi. ?x ! i) ≠ Good as s (λi. ?x ! i) (λi. ?x ! i)"
       using neq oL'_eq_y_all by auto
     have run_diff:
-      "run (λi. y ! i) (λi. ?x ! i) (T0 as s) ≠ run (λi. ?x ! i) (λi. ?x ! i) (T0 as s)"
-      using Good_flip_inputs run_x run_y_eq_run_x by (meson correctness)
+      "run ((!) y) ((!) ?x) (T0 as s) ≠ run ((!) ?x) ((!) ?x) (T0 as s)"
+    proof
+      assume eq: "run ((!) y) ((!) ?x) (T0 as s) =
+              run ((!) ?x) ((!) ?x) (T0 as s)"
+      have R_x: "run ((!) ?x) ((!) ?x) (T0 as s)
+             = Good as s ((!) ?x) ((!) ?x)"
+        by (simp add: correct_T0)
+      have R_y: "run ((!) y) ((!) ?x) (T0 as s)
+             = Good as s ((!) y) ((!) ?x)"
+        by (simp add: correct_T0_encR)
+      from eq R_x R_y have
+        "Good as s ((!) y) ((!) ?x) = Good as s ((!) ?x) ((!) ?x)"
+        by simp
+      thus False using Good_flip_inputs by contradiction
+    qed
 
     have acc_x:  "run (λi. ?x ! i) (λi. ?x ! i) (T0 as s) = accepts M ?x"
       using run_diff run_y_eq_run_x by blast
@@ -2126,7 +2201,16 @@ proof -
   have run_eq:
     "run ((!) x) ((!) y) (T0 as s) = run ((!) x) ((!) x) (T0 as s)"
     by (rule Run_unread_R[OF disj out X])
-  thus ?thesis using correct_T0 by (meson correctness)
+
+  (* Rewrite both Goods to the same run and use run_eq *)
+    have "Good as s ((!) x) ((!) y)
+        = run ((!) x) ((!) y) (T0 as s)"
+    by (simp add: X correct_T0_encR)     (* mixed-oracle bridge *)
+  also have "... = run ((!) x) ((!) x) (T0 as s)"
+    by (rule Run_unread_R[OF disj out X]) (* unread block → same run *)
+  also have "... = Good as s ((!) x) ((!) x)"
+    by (simp add: X correct_T0)           (* baseline bridge *)
+  finally show ?thesis .
 qed
 
 lemma coverage_for_enc_blocks_R:
@@ -2408,7 +2492,7 @@ proof -
     have jlt: "j < length (enumL as s kk)" using IL_def jIL by simp
     from Lcov[OF jlt] obtain i where
       i1: "i ∈ Base.read0 M x0" and i2: "i ∈ blockL_abs enc0 as s j"
-      using touches_def by (meson correctness)
+      using touches_def x0_def by auto
     show "∃i. i ∈ R0 ∧ i ∈ blockL_abs enc0 as s j"
       by (intro exI[of _ i]) (simp add: R0_def i1 i2)
   qed
@@ -2420,7 +2504,7 @@ proof -
     have jlt: "j < length (enumR as s kk)" using IR_def jIR by simp
     from Rcov[OF jlt] obtain i where
       i1: "i ∈ Base.read0 M x0" and i2: "i ∈ blockR_abs enc0 as s kk j"
-      using touches_def by (meson correctness)
+      using touches_def x0_def by auto
     show "∃i. i ∈ R0 ∧ i ∈ blockR_abs enc0 as s kk j"
       by (intro exI[of _ i]) (simp add: R0_def i1 i2)
   qed
