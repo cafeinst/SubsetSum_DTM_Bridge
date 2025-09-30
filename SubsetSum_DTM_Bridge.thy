@@ -1901,64 +1901,240 @@ qed
 lemma run_drive_T0:
   "run oL oR (T0 as s)
    = final_acc (drive (steps M (x0 as s)) (conf M (x0 as s) 0) oL)"
-  by (simp add: T0_def run_tm_to_dtr')
+  by (simp add: run_tm_to_dtr' T0_def)
 
-lemma run_T0_encR_catalog:
-  "run oL ((!) (x0 as s)) (T0 as s)
-   = (∃jL<length (enumL as s kk). Lval_at as s oL jL ∈ set (enumR as s kk))"
+lemma drive_char_RHS_core:
+  "final_acc (drive (steps M (x0 as s)) (conf M (x0 as s) 0) oL)
+   = Good as s oL ((!) (x0 as s))"
 proof -
-  have 
-    "run oL ((!) (x0 as s)) (T0 as s) = Good as s oL ((!) (x0 as s))"
-    (* prove here using your wf/run_agrees_on_seen + the block/catelog lemmas *)
-    sorry
-  then show ?thesis by (simp add: Good_char_encR)
+  let ?x = "x0 as s"
+  let ?T = "T0 as s"
+
+  have RUN0:
+    "final_acc (drive (steps M ?x) (conf M ?x 0) oL) = run oL ((!) ?x) ?T"
+      by (simp add: run_drive_T0)
+
+  define may_read where "may_read ≡ Lset as s ∪ Rset as s"
+  define Y where "Y i = (if i ∈ may_read then oL i else ?x ! i)" for i
+  define y where "y = map Y [0..<length ?x]"
+  have len_y[simp]: "length y = length ?x" by (simp add: y_def)
+
+  have SL_sub_read0:
+    "seenL_run ((!) y) ((!) ?x) ?T ⊆ Base.read0 M ?x"
+    by (rule seenL_T0_subset_read0) (simp add: x0_is_enc)
+  have read0_sub_may:
+    "Base.read0 M ?x ⊆ may_read"
+    unfolding may_read_def by (rule read0_subset_blocks_abs)
+
+  have agree_on_seenL:
+    "⋀i. i ∈ seenL_run ((!) y) ((!) ?x) ?T ⟹ (!) y i = oL i"
+    by (simp add: y_def Y_def SL_sub_read0 read0_sub_may)
+
+  have Good_normalize:
+    "Good as s ((!) y) ((!) ?x) = Good as s oL ((!) ?x)"
+  proof -
+    have Lwin_eq:
+      "⋀j. j < length (enumL as s kk) ⟹
+           Lval_at as s ((!) y) j = Lval_at as s oL j"
+    proof -
+      fix j assume jL: "j < length (enumL as s kk)"
+      let ?a = "length (enc0 as s) + offL as s j"
+      let ?w = "W as s"
+      have blk: "blockL_abs enc0 as s j = {?a ..< ?a + ?w}"
+        by (simp add: blockL_abs_def offL_def)
+      have slice_eq:
+        "map ((!) y) [?a ..< ?a + ?w] = map oL [?a ..< ?a + ?w]"
+      proof (rule nth_equalityI)
+        show "length (map ((!) y) [?a..< ?a+?w]) = length (map oL [?a..< ?a+?w])"
+          by simp
+      next
+        fix t assume "t < length (map ((!) y) [?a..< ?a+?w])"
+        then have tw: "t < ?w" by simp
+        have idx: "[?a..< ?a+?w] ! t = ?a + t" using tw by simp
+        have in_may:
+          "?a + t ∈ may_read"
+          unfolding may_read_def
+          by (intro UnI1) (simp add: Lset_def blockL_abs_def UN_iff jL)
+        show "map ((!) y) [?a..< ?a+?w] ! t = map oL [?a..< ?a+?w] ! t"
+          by (simp add: idx y_def Y_def in_may)
+      qed
+      show "Lval_at as s ((!) y) j = Lval_at as s oL j"
+        by (simp add: Lval_at_def slice_eq)
+    qed
+    show ?thesis
+      unfolding Good_def good_def by (metis Lwin_eq)
+  qed
+
+  have run_yx_eq_olx:
+    "run ((!) y) ((!) ?x) ?T = run oL ((!) ?x) ?T"
+  proof (rule run_agrees_on_seen)
+    show "⋀i. i ∈ seenL_run ((!) y) ((!) ?x) ?T ⟹ (!) y i = oL i"
+      by (rule agree_on_seenL)
+  next
+    show "⋀i. i ∈ seenR_run ((!) y) ((!) ?x) ?T ⟹ (!) ?x i = (!) ?x i"
+      by simp
+  qed
+
+  have run_xx_eq_Good_xx:
+    "run ((!) ?x) ((!) ?x) ?T = Good as s ((!) ?x) ((!) ?x)"
+    by (rule correct_T0)
+
+  have SL_sub_read0_x:
+    "seenL_run ((!) ?x) ((!) ?x) ?T ⊆ Base.read0 M ?x"
+    by (rule seenL_T0_subset_read0) simp
+
+  have run_yx_eq_xx:
+    "run ((!) y) ((!) ?x) ?T = run ((!) ?x) ((!) ?x) ?T"
+  proof (rule run_agrees_on_seen)
+    show "⋀i. i ∈ seenL_run ((!) y) ((!) ?x) ?T ⟹ (!) y i = (!) ?x i"
+    proof -
+      fix i assume iSL: "i ∈ seenL_run ((!) y) ((!) ?x) ?T"
+      from SL_sub_read0 iSL have "i ∈ Base.read0 M ?x" by blast
+      with read0_sub_may have "i ∈ may_read" by blast
+      thus "(!) y i = (!) ?x i" by (simp add: y_def Y_def)
+    qed
+  next
+    show "⋀i. i ∈ seenR_run ((!) y) ((!) ?x) ?T ⟹ (!) ?x i = (!) ?x i" 
+      by simp
+  qed
+
+  have "run oL ((!) ?x) ?T = run ((!) y) ((!) ?x) ?T"
+    by (simp add: run_yx_eq_olx[symmetric])
+  also have "... = run ((!) ?x) ((!) ?x) ?T"
+    by (rule run_yx_eq_xx)
+  also have "... = Good as s ((!) ?x) ((!) ?x)"
+    by (rule run_xx_eq_Good_xx)
+  also have "... = Good as s ((!) y) ((!) ?x)"
+    by (simp add: Good_normalize[symmetric])
+  also have "... = Good as s ((!) y) ((!) ?x)"
+    by (simp add: Good_normalize)
+  finally show ?thesis by (simp add: RUN0)
 qed
 
-lemma run_T0_encL_catalog:
-  "run ((!) (x0 as s)) oR (T0 as s)
-   = (∃jR<length (enumR as s kk). Rval_at as s oR jR ∈ set (enumL as s kk))"
+lemma drive_char_LHS_core:
+   "final_acc (drive (steps M (x0 as s)) (conf M (x0 as s) 0) ((!) (x0 as s)))
+   = Good as s ((!) (x0 as s)) oR"
 proof -
-  have H:
-    "run ((!) (x0 as s)) oR (T0 as s) = Good as s ((!) (x0 as s)) oR"
-    (* prove here using your wf/run_agrees_on_seen + the block/catalog lemmas *)
-    sorry
-  then show ?thesis by (simp add: Good_char_encL)
+  let ?x = "x0 as s"
+  let ?T = "T0 as s"
+
+  have RUN0:
+    "final_acc (drive (steps M ?x) (conf M ?x 0) ((!) ?x)) = run ((!) ?x) oR ?T"
+    by (simp add: run_drive_T0)
+
+  define may_read where "may_read ≡ Lset as s ∪ Rset as s"
+  define Z where "Z i = (if i ∈ may_read then oR i else ?x ! i)" for i
+  define z where "z = map Z [0..<length ?x]"
+  have len_z[simp]: "length z = length ?x" by (simp add: z_def)
+
+   have SR_sub_read0:
+    "seenR_run ((!) ?x) ((!) z) ?T ⊆ Base.read0 M ?x"
+    by (rule seenR_T0_subset_read0) (simp add: x0_is_enc)
+  have read0_sub_may:
+    "Base.read0 M ?x ⊆ may_read"
+    unfolding may_read_def by (rule read0_subset_blocks_abs)
+
+  have agree_on_seenR:
+    "⋀i. i ∈ seenR_run ((!) ?x) ((!) z) ?T ⟹ (!) z i = oR i"
+    by (simp add: z_def Z_def SR_sub_read0 read0_sub_may)
+
+  have Good_normalize_R:
+    "Good as s ((!) ?x) ((!) z) = Good as s ((!) ?x) oR"
+  proof -
+    have Rwin_eq:
+      "⋀j. j < length (enumR as s kk) ⟹
+           Rval_at as s ((!) z) j = Rval_at as s oR j"
+    proof -
+      fix j assume jR: "j < length (enumR as s kk)"
+      let ?a = "length (enc0 as s) + offR as s kk j"
+      let ?w = "W as s"
+      have blk: "blockR_abs enc0 as s kk j = {?a ..< ?a + ?w}"
+        by (simp add: blockR_abs_def)
+      have slice_eq:
+        "map ((!) z) [?a ..< ?a + ?w] = map oR [?a ..< ?a + ?w]"
+      proof (rule nth_equalityI)
+        show "length (map ((!) z) [?a..< ?a+?w]) = 
+              length (map oR [?a..< ?a+?w])" by simp
+      next
+        fix t assume tlt: "t < length (map ((!) z) [?a..< ?a+?w])"
+        hence tw: "t < ?w" by simp
+        have idx: "[?a..< ?a+?w] ! t = ?a + t" using tw by simp
+        have mem: "?a + t ∈ blockR_abs enc0 as s kk j" by (simp add: blk tw)
+        have in_may: "?a + t ∈ may_read"
+          unfolding may_read_def
+          by (intro UnI2) (simp add: Rset_def blockR_abs_def UN_iff jR)
+        show "map ((!) z) [?a..< ?a+?w] ! t = map oR [?a..< ?a+?w] ! t"
+          by (simp add: idx z_def Z_def in_may)
+      qed
+      show "Rval_at as s ((!) z) j = Rval_at as s oR j"
+        by (simp add: Rval_at_def slice_eq)
+    qed
+    show ?thesis
+      unfolding Good_def good_def by (metis Rwin_eq)
+  qed
+
+  have run_xz_eq_xoR:
+    "run ((!) ?x) ((!) z) ?T = run ((!) ?x) oR ?T"
+  proof (rule run_agrees_on_seen)
+    show "⋀i. i ∈ seenL_run ((!) ?x) ((!) z) ?T ⟹ (!) ?x i = (!) ?x i" by simp
+  next
+    show "⋀i. i ∈ seenR_run ((!) ?x) ((!) z) ?T ⟹ (!) z i = oR i"
+      by (rule agree_on_seenR)
+  qed
+
+  have run_xx_eq_Good_xx:
+    "run ((!) ?x) ((!) ?x) ?T = Good as s ((!) ?x) ((!) ?x)"
+    by (rule correct_T0)
+
+  have SR_sub_read0_x:
+    "seenR_run ((!) ?x) ((!) ?x) ?T ⊆ Base.read0 M ?x"
+    by (rule seenR_T0_subset_read0) simp
+
+  have run_xz_eq_xx:
+    "run ((!) ?x) ((!) z) ?T = run ((!) ?x) ((!) ?x) ?T"
+  proof (rule run_agrees_on_seen)
+    show "⋀i. i ∈ seenL_run ((!) ?x) ((!) z) ?T ⟹ (!) ?x i = (!) ?x i" 
+      by simp
+  next
+    show "⋀i. i ∈ seenR_run ((!) ?x) ((!) z) ?T ⟹ (!) z i = (!) ?x i"
+    proof -
+      fix i assume iSR: "i ∈ seenR_run ((!) ?x) ((!) z) ?T"
+      from SR_sub_read0 iSR have "i ∈ Base.read0 M ?x" by blast
+      with read0_sub_may have "i ∈ may_read" by blast
+      thus "(!) z i = (!) ?x i" by (simp add: z_def Z_def)
+    qed
+  qed
+
+  have "run ((!) ?x) oR ?T = run ((!) ?x) ((!) z) ?T"
+    by (simp add: run_xz_eq_xoR[symmetric])
+  also have "... = run ((!) ?x) ((!) ?x) ?T"
+    by (rule run_xz_eq_xx)
+  also have "... = Good as s ((!) ?x) ((!) ?x)"
+    by (rule run_xx_eq_Good_xx)
+  also have "... = Good as s ((!) ?x) ((!) z)"
+    by (simp add: Good_normalize_R[symmetric])
+  also have "... = Good as s ((!) ?x) oR"
+    by (simp add: Good_normalize_R)
+  finally show ?thesis by (simp add: RUN0)
 qed
 
 lemma run_T0_mixed_bridge:
   "run oL ((!) (x0 as s)) (T0 as s) = Good as s oL ((!) (x0 as s))"
-  by (simp add: run_T0_encR_catalog Good_char_encR)
+  by (simp add: run_drive_T0 drive_char_RHS_core)
 
 lemma run_T0_left_bridge:
   "run ((!) (x0 as s)) oR (T0 as s) = Good as s ((!) (x0 as s)) oR"
-  by (simp add: run_T0_encL_catalog Good_char_encL)
-
-  (* proof: symmetric; again no drive_char_*, no correct_T0_* *)
-(* Now convert RHS to Good via your already-proved equivalence *)
-lemma drive_char_RHS_core:
-  "final_acc (drive (steps M (x0 as s)) (conf M (x0 as s) 0) oL)
-   = Good as s oL ((!) (x0 as s))"
-  by (subst run_drive_T0[of oL "(!) (x0 as s)", symmetric])
-     (simp add: run_T0_mixed_bridge)
-
-lemma drive_char_LHS_core:
-  "final_acc (drive (steps M (x0 as s)) (conf M (x0 as s) 0) ((!) (x0 as s)))
-   = Good as s ((!) (x0 as s)) oR"
-  by (subst run_drive_T0[of "(!) (x0 as s)" oR, symmetric])
-     (simp add: run_T0_left_bridge)
-
-(* 2) Core bridge: final_acc ∘ drive equals Good with encR on the right.
-      Prove this ONCE (no references to correct_T0_encR here). *)
-(* Pure machine-side characterization: no Good on the RHS *)
-(* T0 only reads the left oracle, so run = final_acc ∘ drive *)
-
-lemma correct_T0_encR:
-  "run oL ((!) (x0 as s)) (T0 as s) = Good as s oL ((!) (x0 as s))"
-  by (simp add: run_drive_T0 drive_char_RHS_core)
-
-lemma correct_T0_encL:
-  "run ((!) (x0 as s)) oR (T0 as s) = Good as s ((!) (x0 as s)) oR"
   by (simp add: run_drive_T0 drive_char_LHS_core)
+
+lemma run_T0_encR_catalog:
+  "run oL ((!) (x0 as s)) (T0 as s)
+   = (∃jL<length (enumL as s kk). Lval_at as s oL jL ∈ set (enumR as s kk))"
+  by (simp add: run_T0_mixed_bridge Good_char_encR)
+
+lemma run_T0_encL_catalog:
+  "run ((!) (x0 as s)) oR (T0 as s)
+   = (∃jR<length (enumR as s kk). Rval_at as s oR jR ∈ set (enumL as s kk))"
+  by (simp add: run_T0_left_bridge Good_char_encL)
 
 (* 3) Mixed bridge: run on T0 with (oL, encR) equals Good with (oL, encR) *)
 
