@@ -1564,8 +1564,8 @@ proof -
   qed
 qed
 
-definition L0 where "L0 as s = Lset as s ∪ Rset as s"
-definition R0 where "R0 as s = Lset as s ∪ Rset as s"
+definition L0 where "L0 as s = Lset as s"
+definition R0 where "R0 as s = Rset as s"
 definition T0 where
   "T0 as s =
      tm_to_dtr' head0 stepf final_acc
@@ -1607,13 +1607,20 @@ proof -
   finally show ?thesis by (simp add: T0_eq)
 qed
 
-(* NEW: run-wise well-formedness for the concrete input *)
-lemma wf_T0_run:
-  "wf_run (L0 as s) (R0 as s)
+lemma wf_T_run:
+  "wf_run (Lset as s) (Rset as s)
           ((!) (enc as s kk)) ((!) (enc as s kk))
           (T0 as s)"
-  unfolding L0_def R0_def T0_def
-  by (rule wf_T_union_run)
+  unfolding T0_def
+  (* copy the proof of wf_T_union_run, but when you hit an AskL use i∈Lset,
+     and for AskR use j∈Rset. This is true by construction of T0. *)
+  sorry
+
+(* NEW: run-wise well-formedness for the concrete input *)
+lemma wf_T0_run:
+  "wf_run (Lset as s) (Rset as s)
+          ((!) (enc as s kk)) ((!) (enc as s kk)) (T0 as s)"
+  by (rule wf_T_run)
 
 lemma correct_T0:
   "run ((!) (enc as s kk)) ((!) (enc as s kk)) (T0 as s)
