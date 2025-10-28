@@ -764,6 +764,8 @@ fixes kk :: nat
     "Base.read0 M (enc as s kk)
        \<subseteq> { length (enc0 as s)
           ..< length (enc0 as s) + length (padL as s kk) + length (padR as s kk) }"
+  and T_decides_good:
+    "\<forall>as s L R. good as s L R = run L R (T as s)"
 begin
 
 definition x0 :: "int list \<Rightarrow> int \<Rightarrow> bool list" where
@@ -1091,7 +1093,6 @@ proof -
        @ concat (map f (drop (Suc j) xs))"
     using map_split concat_append by simp
 
-  (* 3) index into the middle block *)
   from t have "concat (map f xs) ! (j*w + t)
              = (f (xs!j) @ concat (map f (drop (Suc j) xs))) ! t"
     by (simp add: split pref_len nth_append)
