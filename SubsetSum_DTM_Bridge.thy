@@ -1328,7 +1328,61 @@ proof (rule ccontr)
   thus False using coverage_by_information_theory[OF n_ge2 kk_bounds distinct len] by blast
 qed
 
-(* Symmetric for R-blocks *)
+(* ========================================================================= *)
+(* Symmetric versions for R-blocks                                           *)
+(* ========================================================================= *)
+
+lemma critical_instances_exist_R:
+  assumes n_ge2: "n ≥ 2"
+      and kk_bounds: "1 ≤ kk" "kk < n"
+      and distinct: "distinct_subset_sums as"
+      and len: "length as = n"
+      (* Assume M misses some R-blocks on multiple instances *)
+      and miss_exists: "∃jR. jR < length (enumR as s kk) ∧
+                             Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR = {}"
+  shows "∃as1 s1 as2 s2.
+           length as1 = n ∧ distinct_subset_sums as1 ∧
+           length as2 = n ∧ distinct_subset_sums as2 ∧
+           (∀i. i ∈ Base.read0 M (enc as s kk) ⟶ 
+                enc as1 s1 kk ! i = enc as2 s2 kk ! i) ∧
+           good as1 s1 ((!) (enc as1 s1 kk)) ((!) (enc as1 s1 kk)) ≠
+           good as2 s2 ((!) (enc as2 s2 kk)) ((!) (enc as2 s2 kk))"
+  sorry
+
+theorem coverage_by_information_theory_R:
+  assumes n_ge2: "n ≥ 2"
+      and kk_bounds: "1 ≤ kk" "kk < n"
+      and distinct: "distinct_subset_sums as"
+      and len: "length as = n"
+      (* ASSUME: T misses some R-block *)
+      and always_miss: "∃jR. jR < length (enumR as s kk) ∧
+                             Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR = {}"
+  shows False
+proof -
+  (* Get critical instances from combinatorics *)
+  obtain as1 s1 as2 s2 where
+    len1: "length as1 = n" and dist1: "distinct_subset_sums as1" and
+    len2: "length as2 = n" and dist2: "distinct_subset_sums as2" and
+    agree_on_read: "∀i. i ∈ Base.read0 M (enc as s kk) ⟶ 
+                        enc as1 s1 kk ! i = enc as2 s2 kk ! i" and
+    answers_differ: "good as1 s1 ((!) (enc as1 s1 kk)) ((!) (enc as1 s1 kk)) ≠
+                     good as2 s2 ((!) (enc as2 s2 kk)) ((!) (enc as2 s2 kk))"
+    using critical_instances_exist_R[OF n_ge2 kk_bounds distinct len always_miss] by blast
+  
+  have "accepts M (enc as1 s1 kk) = accepts M (enc as2 s2 kk)"
+  proof -
+    have ag: "⋀i. i ∈ Base.read0 M (enc as1 s1 kk) ⟹ 
+                  enc as1 s1 kk ! i = enc as2 s2 kk ! i"
+      by (meson Coverage_TM.correctness Coverage_TM_axioms)
+    show ?thesis by (rule unread_agreement[OF ag])
+  qed
+  
+  moreover have "accepts M (enc as1 s1 kk) ≠ accepts M (enc as2 s2 kk)"
+    using correctness answers_differ by simp
+  
+  ultimately show False by contradiction
+qed
+
 lemma every_R_block_touched:
   assumes n_ge2: "n ≥ 2"
       and kk_bounds: "1 ≤ kk" "kk < n"
@@ -1336,7 +1390,14 @@ lemma every_R_block_touched:
       and len: "length as = n"
   shows "∀jR < length (enumR as s kk). 
            Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR ≠ {}"
-  sorry
+proof (rule ccontr)
+  assume "¬(∀jR<length (enumR as s kk). 
+              Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR ≠ {})"
+  hence "∃jR. jR < length (enumR as s kk) ∧
+              Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR = {}" by simp
+  (* This contradicts coverage_by_information_theory_R *)
+  thus False using coverage_by_information_theory_R[OF n_ge2 kk_bounds distinct len] by blast
+qed
 
 (* ========================================================================= *)
 (* MAIN COVERAGE THEOREM                                                     *)
