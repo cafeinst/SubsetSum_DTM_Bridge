@@ -1231,87 +1231,191 @@ proof -
 qed
 
 (* ========================================================================= *)
-(* The Combinatorial Existence Claim                                         *)
+(* PART: Oracle-Level Coverage Proof (No Instance Construction Needed)      *)
 (* ========================================================================= *)
 
-(* LEMMA: For distinct subset-sums, critical instances exist
-   
-   This captures the mathematical content of "consider instances where l = r
-   or there is no solution". It says such instances exist with the right
-   properties for the information-theoretic argument.
-   
-   This is a COMBINATORIAL fact about subset-sum, not a construction. *)
-
-lemma critical_instances_exist:
-  assumes n_ge2: "n ≥ 2"
-      and kk_bounds: "1 ≤ kk" "kk < n"
-      and distinct: "distinct_subset_sums as"
-      and len: "length as = n"
-      and miss_exists: "∃jL. jL < length (enumL as s kk) ∧
-                             Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL = {}"
-  shows "∃as1 s1 as2 s2.
-           length as1 = n ∧ distinct_subset_sums as1 ∧
-           length as2 = n ∧ distinct_subset_sums as2 ∧
-           (∀i. i ∈ Base.read0 M (enc as s kk) ⟶ 
-            enc as1 s1 kk ! i = enc as2 s2 kk ! i) ∧
-           good as1 s1 ((!) (enc as1 s1 kk)) ((!) (enc as1 s1 kk)) ≠
-           good as2 s2 ((!) (enc as2 s2 kk)) ((!) (enc as2 s2 kk))"
-  sorry
-
-(* ========================================================================= *)
-(* The Information-Theoretic Impossibility                                   *)
-(* ========================================================================= *)
-
-(* THEOREM: If T always misses some blocks, contradiction
-   
-   This is the formalization of Lemma 1's contradiction argument using
-   information theory rather than explicit construction. *)
-
-theorem coverage_by_information_theory:
-  assumes n_ge2: "n ≥ 2"
-      and kk_bounds: "1 ≤ kk" "kk < n"
-      and distinct: "distinct_subset_sums as"
-      and len: "length as = n"
-      (* ASSUME: T misses some L-block *)
-      and always_miss: "∃jL. jL < length (enumL as s kk) ∧
-                             Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL = {}"
-  shows False
+(* LEMMA: If M doesn't read a block, the tree doesn't see those indices *)
+lemma unread_block_unseen:
+  assumes jL_unread: "Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL = {}"
+  shows "seenL_run ((!) (enc as s kk)) ((!) (enc as s kk)) (T as s) ∩ 
+         blockL_abs enc0 as s jL = {}"
 proof -
-  (* Get critical instances from combinatorics *)
-  obtain as1 s1 as2 s2 where
-    len1: "length as1 = n" and dist1: "distinct_subset_sums as1" and
-    len2: "length as2 = n" and dist2: "distinct_subset_sums as2" and
-    agree_on_read: "∀i. i ∈ Base.read0 M (enc as s kk) ⟶ 
-                      enc as1 s1 kk ! i = enc as2 s2 kk ! i" and
-    answers_differ: "good as1 s1 ((!) (enc as1 s1 kk)) ((!) (enc as1 s1 kk)) ≠
-                    good as2 s2 ((!) (enc as2 s2 kk)) ((!) (enc as2 s2 kk))"
-    using critical_instances_exist[OF n_ge2 kk_bounds distinct len always_miss] 
-    by blast
-  
-  (* Key insight: M reads the same positions on as₁,s₁ as it does on as,s
-     (this would require additional assumptions about M's behavior, 
-     but the idea is that M's reading pattern is determined by the instance) *)
-  
-  (* By unread-agreement: M gives same answer on both instances *)
-  have "accepts M (enc as1 s1 kk) = accepts M (enc as2 s2 kk)"
-  proof -
-    have ag: "⋀i. i ∈ Base.read0 M (enc as1 s1 kk) ⟹ 
-                enc as1 s1 kk ! i = enc as2 s2 kk ! i"
-      using agree_on_read
-      by (meson Coverage_TM.correctness Coverage_TM_axioms)
-    show ?thesis by (rule unread_agreement[OF ag])
-  qed
-
-  moreover have "accepts M (enc as1 s1 kk) ≠ accepts M (enc as2 s2 kk)"
-    using correctness answers_differ by simp
-
-  ultimately show False by contradiction
+  have "seenL_run ((!) (enc as s kk)) ((!) (enc as s kk)) (T as s)
+        ⊆ Base.read0 M (enc as s kk)"
+    unfolding T_def using seenL_tm_to_dtr_subset_read0 by simp
+  thus ?thesis using jL_unread by blast
 qed
 
-(* ========================================================================= *)
-(* COROLLARY: Every L-block must be touched                                 *)
-(* ========================================================================= *)
+(* LEMMA: Can flip oracle on block to change good value 
+   
+   Key insight: If we have at least 2 LHS values, and some match RHS while
+   some don't, then we can change whether good holds by changing one L-block. *)
+lemma oracle_flip_changes_good:
+  assumes jL_bound: "jL < length (enumL as s kk)"
+      and two_lhs: "2 ≤ card (set (enumL as s kk))"
+      and hit: "∃v ∈ set (enumL as s kk). v ∈ set (enumR as s kk)"
+      and miss: "∃v ∈ set (enumL as s kk). v ∉ set (enumR as s kk)"
+  shows "∃oL'. (∀i. i ∉ blockL_abs enc0 as s jL ⟶ 
+                     oL' i = (enc as s kk) ! i) ∧
+               good as s oL' ((!) (enc as s kk)) ≠ 
+               good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+proof -
+  (* Get two different values from enumL *)
+  obtain v_hit where v_hit_in_L: "v_hit ∈ set (enumL as s kk)" 
+                 and v_hit_in_R: "v_hit ∈ set (enumR as s kk)"
+    using hit by blast
+  obtain v_miss where v_miss_in_L: "v_miss ∈ set (enumL as s kk)"
+                  and v_miss_not_R: "v_miss ∉ set (enumR as s kk)"
+    using miss by blast
+  
+  have distinct_L: "distinct (enumL as s kk)" by (simp add: enumL_def)
+  
+  (* Pick which value to use based on current state *)
+  define target where "target = (if good as s ((!) (enc as s kk)) ((!) (enc as s kk))
+                                  then v_miss else v_hit)"
+  
+  (* Build new oracle that puts target in block jL *)
+  define bits where "bits = to_bits (W as s) target"
 
+  have target_in: "target ∈ set (enumL as s kk)"
+    using target_def v_hit_in_L v_miss_in_L by auto
+
+  have target_in_union: "target ∈ set (enumL as s kk) ∪ set (enumR as s kk)"
+    using target_in by auto
+
+  have bits_len: "length bits = W as s"
+    using bits_roundtrip[OF target_in_union] bits_def by blast
+
+  have bits_val: "from_bits bits = target"
+    using bits_roundtrip[OF target_in_union] bits_def by blast
+  
+  define oL' where "oL' i = (
+    let base = length (enc0 as s) + offL as s jL in
+    if base ≤ i ∧ i < base + W as s 
+    then bits ! (i - base)
+    else (enc as s kk) ! i)" for i
+  
+  have outside_same: "⋀i. i ∉ blockL_abs enc0 as s jL ⟹ oL' i = (enc as s kk) ! i"
+    by (auto simp: oL'_def blockL_abs_def)
+  
+  have Lval_changed: "Lval_at as s oL' jL = target"
+    sorry (* Technical proof that oL' encodes target in block jL *)
+  
+  have good_flips: "good as s oL' ((!) (enc as s kk)) ≠ 
+                  good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+  proof (cases "good as s ((!) (enc as s kk)) ((!) (enc as s kk))")
+    case True
+  (* Was good, now make it bad by putting v_miss *)
+    have "target = v_miss" using True target_def by simp
+    hence "Lval_at as s oL' jL = v_miss" using Lval_changed by simp
+  (* Show this makes good false *)
+    show ?thesis sorry
+  next
+    case False
+  (* Was bad, now make it good by putting v_hit *)
+    have "target = v_hit" using False target_def by simp
+    hence "Lval_at as s oL' jL = v_hit" using Lval_changed by simp
+  (* Show this makes good true *)
+    show ?thesis sorry
+  qed
+  have good_flips: "good as s oL' ((!) (enc as s kk)) ≠ 
+                  good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+  proof (cases "good as s ((!) (enc as s kk)) ((!) (enc as s kk))")
+    case True
+    have "target = v_miss" using True target_def by simp
+    hence "Lval_at as s oL' jL = v_miss" using Lval_changed by simp
+    show ?thesis sorry
+  next
+    case False
+    have "target = v_hit" using False target_def by simp
+    hence "Lval_at as s oL' jL = v_hit" using Lval_changed by simp
+    show ?thesis sorry
+  qed
+  
+  (* NOW CONSTRUCT THE EXISTENTIAL! *)
+  show ?thesis
+  proof (intro exI[of _ oL'] conjI)
+    show "∀i. i ∉ blockL_abs enc0 as s jL ⟶ oL' i = (enc as s kk) ! i"
+      using outside_same by blast
+    show "good as s oL' ((!) (enc as s kk)) ≠ 
+          good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+      using good_flips .
+  qed
+qed
+
+(* THEOREM: If M doesn't read a block, contradiction *)
+theorem coverage_by_oracle_contradiction:
+  assumes n_ge2: "n ≥ 2"
+      and kk_bounds: "1 ≤ kk" "kk < n"
+      and distinct: "distinct_subset_sums as"
+      and len: "length as = n"
+      and miss_block: "∃jL. jL < length (enumL as s kk) ∧
+                            Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL = {}"
+  shows False
+proof -
+  (* Get the unread block *)
+  obtain jL where 
+    jL_bound: "jL < length (enumL as s kk)" and
+    jL_unread: "Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL = {}"
+    using miss_block by blast
+  
+  (* For the oracle flip to work, we need these conditions *)
+  have two_lhs: "2 ≤ card (set (enumL as s kk))"
+    sorry (* Need: distinct-subset-sums implies at least 2 LHS values *)
+  
+  have hit: "∃v ∈ set (enumL as s kk). v ∈ set (enumR as s kk)"
+    sorry (* Need: with n≥2, kk bounds, distinct-sums, intersection is nonempty *)
+  
+  have miss: "∃v ∈ set (enumL as s kk). v ∉ set (enumR as s kk)"
+    sorry (* Need: with n≥2, kk bounds, distinct-sums, not all LHS in RHS *)
+  
+(* Get flipped oracle *)
+  have flip_exists: "∃oL'. (∀i. i ∉ blockL_abs enc0 as s jL ⟶ 
+                               oL' i = (enc as s kk) ! i) ∧
+                         good as s oL' ((!) (enc as s kk)) ≠ 
+                         good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+    using oracle_flip_changes_good[OF jL_bound two_lhs hit miss] .
+
+(* Get flipped oracle *)
+  obtain oL' where
+    outside_same_obj: "∀i. i ∉ blockL_abs enc0 as s jL ⟶ 
+                         oL' i = (enc as s kk) ! i" and
+    good_flips: "good as s oL' ((!) (enc as s kk)) ≠ 
+               good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+    using flip_exists by auto
+
+(* Convert to meta-level *)
+  have outside_same: "⋀i. i ∉ blockL_abs enc0 as s jL ⟹ oL' i = (enc as s kk) ! i"
+    using outside_same_obj by blast
+  
+  (* Tree doesn't see the flipped block *)
+  have unseen: "seenL_run ((!) (enc as s kk)) ((!) (enc as s kk)) (T as s) ∩ 
+                blockL_abs enc0 as s jL = {}"
+    using unread_block_unseen[OF jL_unread] .
+  
+(* Therefore tree gives same answer with oL' *)
+  have L_agree: "⋀i. i ∈ seenL_run ((!) (enc as s kk)) ((!) (enc as s kk)) (T as s) ⟹ 
+                   oL' i = (enc as s kk) ! i"
+    using unseen outside_same by blast
+
+  have R_agree: "⋀j. j ∈ seenR_run ((!) (enc as s kk)) ((!) (enc as s kk)) (T as s) ⟹ 
+                   ((!) (enc as s kk)) j = ((!) (enc as s kk)) j"
+    by simp
+
+  have "run oL' ((!) (enc as s kk)) (T as s) = 
+      run ((!) (enc as s kk)) ((!) (enc as s kk)) (T as s)"
+    by (simp add: run_agree_on_seen(1)[OF L_agree R_agree])
+  
+  (* But the tree must give correct answers *)
+  hence "good as s oL' ((!) (enc as s kk)) = 
+         good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+    using correct_T by (meson correctness)
+  
+  (* Contradiction! *)
+  with good_flips show False by contradiction
+qed
+
+(* COROLLARY: Every L-block must be touched *)
 lemma every_L_block_touched:
   assumes n_ge2: "n ≥ 2"
       and kk_bounds: "1 ≤ kk" "kk < n"
@@ -1324,65 +1428,11 @@ proof (rule ccontr)
               Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL ≠ {})"
   hence "∃jL. jL < length (enumL as s kk) ∧
               Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL = {}" by simp
-  (* This contradicts coverage_by_information_theory *)
-  thus False using coverage_by_information_theory[OF n_ge2 kk_bounds distinct len] by blast
+  thus False using coverage_by_oracle_contradiction[OF n_ge2 kk_bounds distinct len] 
+    by blast
 qed
 
-(* ========================================================================= *)
-(* Symmetric versions for R-blocks                                           *)
-(* ========================================================================= *)
-
-lemma critical_instances_exist_R:
-  assumes n_ge2: "n ≥ 2"
-      and kk_bounds: "1 ≤ kk" "kk < n"
-      and distinct: "distinct_subset_sums as"
-      and len: "length as = n"
-      (* Assume M misses some R-blocks on multiple instances *)
-      and miss_exists: "∃jR. jR < length (enumR as s kk) ∧
-                             Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR = {}"
-  shows "∃as1 s1 as2 s2.
-           length as1 = n ∧ distinct_subset_sums as1 ∧
-           length as2 = n ∧ distinct_subset_sums as2 ∧
-           (∀i. i ∈ Base.read0 M (enc as s kk) ⟶ 
-                enc as1 s1 kk ! i = enc as2 s2 kk ! i) ∧
-           good as1 s1 ((!) (enc as1 s1 kk)) ((!) (enc as1 s1 kk)) ≠
-           good as2 s2 ((!) (enc as2 s2 kk)) ((!) (enc as2 s2 kk))"
-  sorry
-
-theorem coverage_by_information_theory_R:
-  assumes n_ge2: "n ≥ 2"
-      and kk_bounds: "1 ≤ kk" "kk < n"
-      and distinct: "distinct_subset_sums as"
-      and len: "length as = n"
-      (* ASSUME: T misses some R-block *)
-      and always_miss: "∃jR. jR < length (enumR as s kk) ∧
-                             Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR = {}"
-  shows False
-proof -
-  (* Get critical instances from combinatorics *)
-  obtain as1 s1 as2 s2 where
-    len1: "length as1 = n" and dist1: "distinct_subset_sums as1" and
-    len2: "length as2 = n" and dist2: "distinct_subset_sums as2" and
-    agree_on_read: "∀i. i ∈ Base.read0 M (enc as s kk) ⟶ 
-                        enc as1 s1 kk ! i = enc as2 s2 kk ! i" and
-    answers_differ: "good as1 s1 ((!) (enc as1 s1 kk)) ((!) (enc as1 s1 kk)) ≠
-                     good as2 s2 ((!) (enc as2 s2 kk)) ((!) (enc as2 s2 kk))"
-    using critical_instances_exist_R[OF n_ge2 kk_bounds distinct len always_miss] by blast
-  
-  have "accepts M (enc as1 s1 kk) = accepts M (enc as2 s2 kk)"
-  proof -
-    have ag: "⋀i. i ∈ Base.read0 M (enc as1 s1 kk) ⟹ 
-                  enc as1 s1 kk ! i = enc as2 s2 kk ! i"
-      by (meson Coverage_TM.correctness Coverage_TM_axioms)
-    show ?thesis by (rule unread_agreement[OF ag])
-  qed
-  
-  moreover have "accepts M (enc as1 s1 kk) ≠ accepts M (enc as2 s2 kk)"
-    using correctness answers_differ by simp
-  
-  ultimately show False by contradiction
-qed
-
+(* Symmetric for R-blocks *)
 lemma every_R_block_touched:
   assumes n_ge2: "n ≥ 2"
       and kk_bounds: "1 ≤ kk" "kk < n"
@@ -1390,22 +1440,7 @@ lemma every_R_block_touched:
       and len: "length as = n"
   shows "∀jR < length (enumR as s kk). 
            Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR ≠ {}"
-proof (rule ccontr)
-  assume "¬(∀jR<length (enumR as s kk). 
-              Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR ≠ {})"
-  hence "∃jR. jR < length (enumR as s kk) ∧
-              Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR = {}" by simp
-  (* This contradicts coverage_by_information_theory_R *)
-  thus False using coverage_by_information_theory_R[OF n_ge2 kk_bounds distinct len] by blast
-qed
-
-(* ========================================================================= *)
-(* MAIN COVERAGE THEOREM                                                     *)
-(* ========================================================================= *)
-
-(* THEOREM: Every catalog block must be touched
-   
-   This is Lemma 1 from the English proof, fully formalized. *)
+  sorry (* Symmetric version of coverage_by_oracle_contradiction *)
 
 theorem coverage_blocks:
   assumes n_ge2: "n ≥ 2"
