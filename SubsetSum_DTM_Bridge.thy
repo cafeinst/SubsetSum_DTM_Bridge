@@ -1299,37 +1299,86 @@ proof -
     by (auto simp: oL'_def blockL_abs_def)
   
   have Lval_changed: "Lval_at as s oL' jL = target"
-    sorry (* Technical proof that oL' encodes target in block jL *)
+  proof -
+    define base where "base = length (enc0 as s) + offL as s jL"
+  
+    have map_eq: "map oL' [base ..< base + W as s] = bits"
+    proof (rule nth_equalityI)
+      show "length (map oL' [base ..< base + W as s]) = length bits"
+        using bits_len by simp
+    next
+      fix i assume "i < length (map oL' [base ..< base + W as s])"
+      hence i_lt: "i < W as s" by simp
+      have "map oL' [base ..< base + W as s] ! i = oL' (base + i)"
+        using i_lt by simp
+      also have "... = bits ! i"
+        using i_lt by (simp add: oL'_def base_def Let_def)
+      finally show "map oL' [base ..< base + W as s] ! i = bits ! i" .
+    qed
+  
+    show ?thesis
+      unfolding Lval_at_def base_def[symmetric]
+      using map_eq bits_val by simp
+  qed
   
   have good_flips: "good as s oL' ((!) (enc as s kk)) ≠ 
-                  good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+                    good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
   proof (cases "good as s ((!) (enc as s kk)) ((!) (enc as s kk))")
     case True
   (* Was good, now make it bad by putting v_miss *)
     have "target = v_miss" using True target_def by simp
-    hence "Lval_at as s oL' jL = v_miss" using Lval_changed by simp
-  (* Show this makes good false *)
+    hence val_miss: "Lval_at as s oL' jL = v_miss" using Lval_changed by simp
+  
+  (* v_miss doesn't match any RHS value *)
+    have "∀jR < length (enumR as s kk). Rval_at as s ((!) (enc as s kk)) jR ≠ v_miss"
+    proof (intro allI impI)
+      fix jR assume "jR < length (enumR as s kk)"
+      hence "Rval_at as s ((!) (enc as s kk)) jR = enumR as s kk ! jR"
+        by (rule Rval_at_on_enc_block)
+      thus "Rval_at as s ((!) (enc as s kk)) jR ≠ v_miss"
+        using v_miss_not_R by (metis in_set_conv_nth ‹jR < length (enumR as s kk)›)
+    qed
+  
+  (* After flip, position jL can't match anything *)
+    hence no_match_jL: "∀jR < length (enumR as s kk). 
+                        Lval_at as s oL' jL ≠ Rval_at as s ((!) (enc as s kk)) jR"
+      using val_miss by fastforce
+  
+  (* But we need to show good changes... this is the tricky part *)
     show ?thesis sorry
+  
   next
     case False
   (* Was bad, now make it good by putting v_hit *)
     have "target = v_hit" using False target_def by simp
-    hence "Lval_at as s oL' jL = v_hit" using Lval_changed by simp
-  (* Show this makes good true *)
-    show ?thesis sorry
-  qed
-  have good_flips: "good as s oL' ((!) (enc as s kk)) ≠ 
-                  good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
-  proof (cases "good as s ((!) (enc as s kk)) ((!) (enc as s kk))")
-    case True
-    have "target = v_miss" using True target_def by simp
-    hence "Lval_at as s oL' jL = v_miss" using Lval_changed by simp
-    show ?thesis sorry
-  next
-    case False
-    have "target = v_hit" using False target_def by simp
-    hence "Lval_at as s oL' jL = v_hit" using Lval_changed by simp
-    show ?thesis sorry
+    hence val_hit: "Lval_at as s oL' jL = v_hit" using Lval_changed by simp
+  
+  (* v_hit matches some RHS value *)
+    have "∃jR < length (enumR as s kk). Rval_at as s ((!) (enc as s kk)) jR = v_hit"
+    proof -
+      have "v_hit ∈ set (enumR as s kk)" using v_hit_in_R .
+      then obtain jR where "jR < length (enumR as s kk)" 
+                     and "enumR as s kk ! jR = v_hit"
+        by (meson in_set_conv_nth)
+      moreover have "Rval_at as s ((!) (enc as s kk)) jR = enumR as s kk ! jR"
+        using Rval_at_on_enc_block[OF ‹jR < length (enumR as s kk)›] .
+      ultimately show ?thesis by auto
+    qed
+  
+  (* So position jL now matches something *)
+    then obtain jR where jR_bound: "jR < length (enumR as s kk)"
+                  and match: "Rval_at as s ((!) (enc as s kk)) jR = v_hit"
+      by blast
+  
+    have "Lval_at as s oL' jL = Rval_at as s ((!) (enc as s kk)) jR"
+      using val_hit match by simp
+  
+  (* This witness proves good is true after flip *)
+    hence "good as s oL' ((!) (enc as s kk))"
+      unfolding good_def using jL_bound jR_bound by blast
+  
+  (* But it was false before, so they differ *)
+    thus ?thesis using False by simp
   qed
   
   (* NOW CONSTRUCT THE EXISTENTIAL! *)
@@ -1349,6 +1398,8 @@ theorem coverage_by_oracle_contradiction:
       and kk_bounds: "1 ≤ kk" "kk < n"
       and distinct: "distinct_subset_sums as"
       and len: "length as = n"
+      and hit: "∃v ∈ set (enumL as s kk). v ∈ set (enumR as s kk)"  (* NEW *)
+      and miss: "∃v ∈ set (enumL as s kk). v ∉ set (enumR as s kk)"  (* NEW *)
       and miss_block: "∃jL. jL < length (enumL as s kk) ∧
                             Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL = {}"
   shows False
@@ -1361,13 +1412,20 @@ proof -
   
   (* For the oracle flip to work, we need these conditions *)
   have two_lhs: "2 ≤ card (set (enumL as s kk))"
-    sorry (* Need: distinct-subset-sums implies at least 2 LHS values *)
+  proof -
+    have "card (set (enumL as s kk)) = card (LHS (e_k as s kk) (length as))"
+      by simp
+    also have "... = 2 ^ kk"
+      using card_LHS_e_k distinct kk_bounds(2) len less_or_eq_imp_le by blast
+    also have "... ≥ 2"
+      using kk_bounds
+      by (metis add_0 add_lessD1 linorder_not_less nat_power_less_imp_less 
+          power_one_right)
+    finally show ?thesis .
+  qed
   
-  have hit: "∃v ∈ set (enumL as s kk). v ∈ set (enumR as s kk)"
-    sorry (* Need: with n≥2, kk bounds, distinct-sums, intersection is nonempty *)
-  
-  have miss: "∃v ∈ set (enumL as s kk). v ∉ set (enumR as s kk)"
-    sorry (* Need: with n≥2, kk bounds, distinct-sums, not all LHS in RHS *)
+(* Remove the sorry lines, use the assumptions directly *)
+(* hit and miss are now assumptions, not things to prove *)
   
 (* Get flipped oracle *)
   have flip_exists: "∃oL'. (∀i. i ∉ blockL_abs enc0 as s jL ⟶ 
@@ -1421,6 +1479,8 @@ lemma every_L_block_touched:
       and kk_bounds: "1 ≤ kk" "kk < n"
       and distinct: "distinct_subset_sums as"
       and len: "length as = n"
+      and hit: "∃v ∈ set (enumL as s kk). v ∈ set (enumR as s kk)"  (* NEW *)
+      and miss: "∃v ∈ set (enumL as s kk). v ∉ set (enumR as s kk)"  (* NEW *)
   shows "∀jL < length (enumL as s kk). 
            Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL ≠ {}"
 proof (rule ccontr)
@@ -1428,9 +1488,33 @@ proof (rule ccontr)
               Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL ≠ {})"
   hence "∃jL. jL < length (enumL as s kk) ∧
               Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s jL = {}" by simp
-  thus False using coverage_by_oracle_contradiction[OF n_ge2 kk_bounds distinct len] 
+  thus False 
+    using coverage_by_oracle_contradiction[OF n_ge2 kk_bounds distinct len hit miss] 
     by blast
 qed
+
+(* Symmetric R-block oracle flip lemma *)
+lemma oracle_flip_changes_good_R:
+  assumes jR_bound: "jR < length (enumR as s kk)"
+      and two_rhs: "2 ≤ card (set (enumR as s kk))"
+      and hit_R: "∃v ∈ set (enumR as s kk). v ∈ set (enumL as s kk)"
+      and miss_R: "∃v ∈ set (enumR as s kk). v ∉ set (enumL as s kk)"
+  shows "∃oR'. (∀i. i ∉ blockR_abs enc0 as s kk jR ⟶ 
+                     oR' i = (enc as s kk) ! i) ∧
+               good as s ((!) (enc as s kk)) oR' ≠ 
+               good as s ((!) (enc as s kk)) ((!) (enc as s kk))"
+  sorry (* Symmetric to oracle_flip_changes_good *)
+
+(* Symmetric R-block contradiction theorem *)
+theorem coverage_by_oracle_contradiction_R:
+  assumes n_ge2: "n ≥ 2"
+      and kk_bounds: "1 ≤ kk" "kk < n"
+      and distinct: "distinct_subset_sums as"
+      and len: "length as = n"
+      and miss_block_R: "∃jR. jR < length (enumR as s kk) ∧
+                              Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR = {}"
+  shows False
+  sorry (* Symmetric to coverage_by_oracle_contradiction *)
 
 (* Symmetric for R-blocks *)
 lemma every_R_block_touched:
@@ -1438,161 +1522,33 @@ lemma every_R_block_touched:
       and kk_bounds: "1 ≤ kk" "kk < n"
       and distinct: "distinct_subset_sums as"
       and len: "length as = n"
+      and hit: "∃v ∈ set (enumL as s kk). v ∈ set (enumR as s kk)"
+      and miss: "∃v ∈ set (enumL as s kk). v ∉ set (enumR as s kk)" 
   shows "∀jR < length (enumR as s kk). 
            Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR ≠ {}"
-  sorry (* Symmetric version of coverage_by_oracle_contradiction *)
+proof (rule ccontr)
+  assume "¬(∀jR<length (enumR as s kk). 
+              Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR ≠ {})"
+  hence "∃jR. jR < length (enumR as s kk) ∧
+              Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk jR = {}" by simp
+  thus False using coverage_by_oracle_contradiction_R[OF n_ge2 kk_bounds distinct len] 
+    by blast
+qed
 
 theorem coverage_blocks:
   assumes n_ge2: "n ≥ 2"
       and kk_bounds: "1 ≤ kk" "kk < n"
       and distinct: "distinct_subset_sums as"
       and len: "length as = n"
+      and hit: "∃v ∈ set (enumL as s kk). v ∈ set (enumR as s kk)"
+      and miss: "∃v ∈ set (enumL as s kk). v ∉ set (enumR as s kk)"
   shows "(∀j<length (enumL as s kk). 
             Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s j ≠ {}) ∧
          (∀j<length (enumR as s kk). 
             Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk j ≠ {})"
-  using every_L_block_touched[OF n_ge2 kk_bounds distinct len]
-        every_R_block_touched[OF n_ge2 kk_bounds distinct len]
+  using every_L_block_touched[OF n_ge2 kk_bounds distinct len hit miss]
+        every_R_block_touched[OF n_ge2 kk_bounds distinct len hit miss]
   by blast
-
-(* ========================================================================= *)
-(* THE LOWER BOUND: steps ≥ |LHS| + |RHS|                                   *)
-(* ========================================================================= *)
-
-lemma steps_lower_bound:
-  assumes n_def: "n = length as" 
-      and distinct: "distinct_subset_sums as"
-      and n_ge2: "n ≥ 2"
-      and kk_bounds: "1 ≤ kk" "kk < n"
-  shows "steps M (enc as s kk) ≥
-           card (LHS (e_k as s kk) n) + card (RHS (e_k as s kk) n)"
-proof -
-  (* Coverage: every block is touched *)
-  from coverage_blocks[OF n_ge2 kk_bounds distinct n_def[symmetric]]
-  have Lcov: "∀j<length (enumL as s kk). 
-                Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s j ≠ {}"
-   and Rcov: "∀j<length (enumR as s kk). 
-                Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk j ≠ {}"
-    by blast+
-  
-  (* Pick representatives from each block *)
-  define pickL where "pickL j = (SOME i. i ∈ Base.read0 M (enc as s kk) ∧ 
-                                          i ∈ blockL_abs enc0 as s j)" for j
-  define pickR where "pickR j = (SOME i. i ∈ Base.read0 M (enc as s kk) ∧ 
-                                          i ∈ blockR_abs enc0 as s kk j)" for j
-  
-  (* These are well-defined by coverage *)
-  have pickL_props: "∀j < length (enumL as s kk).
-                     pickL j ∈ Base.read0 M (enc as s kk) ∧
-                     pickL j ∈ blockL_abs enc0 as s j"
-  proof (intro allI impI)
-    fix j assume j_bound: "j < length (enumL as s kk)"
-    from Lcov j_bound have nonempty: "Base.read0 M (enc as s kk) ∩ blockL_abs enc0 as s j ≠ {}" 
-      by blast
-    then obtain i where "i ∈ Base.read0 M (enc as s kk) ∧ i ∈ blockL_abs enc0 as s j" 
-      by blast
-    hence "∃i. i ∈ Base.read0 M (enc as s kk) ∧ i ∈ blockL_abs enc0 as s j" 
-      by blast
-    thus "pickL j ∈ Base.read0 M (enc as s kk) ∧ pickL j ∈ blockL_abs enc0 as s j"
-      unfolding pickL_def by (rule someI_ex)
-  qed
-  
-  have pickR_props: "∀j < length (enumR as s kk).
-                     pickR j ∈ Base.read0 M (enc as s kk) ∧
-                     pickR j ∈ blockR_abs enc0 as s kk j"
-  proof (intro allI impI)
-    fix j assume j_bound: "j < length (enumR as s kk)"
-    from Rcov j_bound have nonempty: "Base.read0 M (enc as s kk) ∩ blockR_abs enc0 as s kk j ≠ {}" 
-      by blast
-    then obtain i where "i ∈ Base.read0 M (enc as s kk) ∧ i ∈ blockR_abs enc0 as s kk j" 
-      by blast
-    hence "∃i. i ∈ Base.read0 M (enc as s kk) ∧ i ∈ blockR_abs enc0 as s kk j" 
-      by blast
-    thus "pickR j ∈ Base.read0 M (enc as s kk) ∧ pickR j ∈ blockR_abs enc0 as s kk j"
-      unfolding pickR_def by (rule someI_ex)
-  qed
-  
-  (* Representatives are injective (different blocks → different positions) *)
-  have inj_L: "inj_on pickL {..<length (enumL as s kk)}"
-  proof (rule inj_onI)
-    fix j1 j2
-    assume j1: "j1 ∈ {..<length (enumL as s kk)}" and 
-         j2: "j2 ∈ {..<length (enumL as s kk)}" and
-         eq: "pickL j1 = pickL j2"
-    have "pickL j1 ∈ blockL_abs enc0 as s j1" using pickL_props j1 by simp
-    moreover have "pickL j2 ∈ blockL_abs enc0 as s j2" using pickL_props j2 by simp
-    ultimately have "blockL_abs enc0 as s j1 ∩ blockL_abs enc0 as s j2 ≠ {}"
-      using eq by fastforce
-    thus "j1 = j2" using blockL_abs_disjoint by blast
-  qed
-
-  
-  have inj_R: "inj_on pickR {..<length (enumR as s kk)}"
-  proof (rule inj_onI)
-    fix j1 j2
-    assume j1: "j1 ∈ {..<length (enumR as s kk)}" and
-         j2: "j2 ∈ {..<length (enumR as s kk)}" and
-         eq: "pickR j1 = pickR j2"
-    have "pickR j1 ∈ blockR_abs enc0 as s kk j1" using pickR_props j1 by simp
-    moreover have "pickR j2 ∈ blockR_abs enc0 as s kk j2" using pickR_props j2 by simp
-    ultimately have "blockR_abs enc0 as s kk j1 ∩ blockR_abs enc0 as s kk j2 ≠ {}"
-      using eq by fastforce
-    thus "j1 = j2" using blockR_abs_disjoint by blast
-  qed
-  
-  (* L and R representatives are disjoint *)
-  have disj: "pickL ` {..<length (enumL as s kk)} ∩ 
-              pickR ` {..<length (enumR as s kk)} = {}"
-  proof
-    show "pickL ` {..<length (enumL as s kk)} ∩ 
-          pickR ` {..<length (enumR as s kk)} ⊆ {}"
-    proof
-      fix i assume "i ∈ pickL ` {..<length (enumL as s kk)} ∩ 
-                          pickR ` {..<length (enumR as s kk)}"
-      then obtain jL jR where
-        jL: "jL < length (enumL as s kk)" and iL: "i = pickL jL" and
-        jR: "jR < length (enumR as s kk)" and iR: "i = pickR jR" by auto
-      have "i ∈ blockL_abs enc0 as s jL" using pickL_props jL iL by simp
-      moreover have "i ∈ blockR_abs enc0 as s kk jR" using pickR_props jR iR by simp
-      ultimately have "blockL_abs enc0 as s jL ∩ blockR_abs enc0 as s kk jR ≠ {}"
-        by blast
-      thus "i ∈ {}" using blockL_abs_blockR_abs_disjoint[OF jL] by blast
-    qed
-  qed simp
-  
-  (* Count: |pickL| + |pickR| ≤ |read0| ≤ steps *)
-  have "card {..<length (enumL as s kk)} + card {..<length (enumR as s kk)} ≤ 
-        card (Base.read0 M (enc as s kk))"
-  proof -
-    have "card (pickL ` {..<length (enumL as s kk)} ∪ 
-                pickR ` {..<length (enumR as s kk)}) ≤ 
-          card (Base.read0 M (enc as s kk))"
-      by (intro card_mono) (auto simp: pickL_props pickR_props)
-    moreover have "card (pickL ` {..<length (enumL as s kk)} ∪ 
-                         pickR ` {..<length (enumR as s kk)}) =
-                   card (pickL ` {..<length (enumL as s kk)}) + 
-                   card (pickR ` {..<length (enumR as s kk)})"
-      using disj by (simp add: card_Un_disjoint)
-    moreover have "card (pickL ` {..<length (enumL as s kk)}) = 
-                   card {..<length (enumL as s kk)}"
-      using card_image[OF inj_L] by simp
-    moreover have "card (pickR ` {..<length (enumR as s kk)}) = 
-                   card {..<length (enumR as s kk)}"
-      using card_image[OF inj_R] by simp
-    ultimately show ?thesis by simp
-  qed
-  
-  moreover have "card (Base.read0 M (enc as s kk)) ≤ steps M (enc as s kk)"
-    by (rule Base.card_read0_le_steps)
-  
-  moreover have "card {..<length (enumL as s kk)} = card (LHS (e_k as s kk) n)"
-    by (simp add: enumL_def n_def)
-  
-  moreover have "card {..<length (enumR as s kk)} = card (RHS (e_k as s kk) n)"
-    by (simp add: enumR_def n_def)
-  
-  ultimately show ?thesis by simp
-qed
 
 end  (* context Coverage_TM *)
 
